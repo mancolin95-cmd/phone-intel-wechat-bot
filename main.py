@@ -3,9 +3,10 @@ import requests
 import hashlib
 import feedparser
 from datetime import datetime
+from urllib.parse import urlparse, parse_qs
 
 # 监控品牌
-BRANDS = ["华为", "小米", "OPPO", "vivo", "荣耀", "一加", "三星", "Apple"]
+BRANDS = ["华为", "小米", "OPPO", "vivo", "荣耀", "一加", "Apple", "三星"]
 
 # 科技媒体 RSS
 MEDIA_RSS = [
@@ -30,9 +31,6 @@ processed_hashes = set()
 
 
 def send_wechat(brand, summary, link, news_time):
-    """
-    发送企业微信消息，使用 Markdown 格式
-    """
     message = f"""## 📱 {brand}
 
 {summary}
@@ -50,9 +48,6 @@ def send_wechat(brand, summary, link, news_time):
 
 
 def summarize(content):
-    """
-    使用 DeepSeek API 生成新闻摘要
-    """
     prompt = f"""
 你是手机行业情报分析助手。
 请输出：
@@ -87,9 +82,6 @@ def summarize(content):
 
 
 def is_today(published_struct):
-    """
-    判断 RSS 新闻是否是当天
-    """
     if not published_struct:
         return False
     news_date = datetime(*published_struct[:6])
@@ -97,14 +89,27 @@ def is_today(published_struct):
     return news_date.date() == today.date()
 
 
+def get_original_link(entry):
+    """
+    处理 Google News RSS 的跳转链接，尽量返回新闻原文链接
+    """
+    link = entry.get("link", "")
+    # Google RSS 特殊处理
+    if "news.google.com" in link and entry.get("id"):
+        # id里通常是原文URL
+        link_candidate = entry["id"]
+        if link_candidate.startswith("http"):
+            link = link_candidate
+        else:
+            # 尝试解析 q= 后的 URL
+            parsed = urlparse(link_candidate)
+            qs = parse_qs(parsed.query)
+            if "url" in qs:
+                link = qs["url"][0]
+    return link
+
+
 def process_news(brand, title, link, published_struct):
-    """
-    处理单条新闻：
-    - 去重
-    - 调用 DeepSeek 摘要
-    - 重要度过滤
-    - 推送企业微信
-    """
     if not is_today(published_struct):
         return
 
@@ -117,7 +122,7 @@ def process_news(brand, title, link, published_struct):
     if not summary:
         return
 
-    # 简单重要度过滤
+    # 重要度过滤
     if "重要度 1" in summary or "重要度 2" in summary or "重要度 3" in summary:
         return
 
@@ -127,27 +132,22 @@ def process_news(brand, title, link, published_struct):
 
 
 def fetch_google_news():
-    """
-    抓取 Google News RSS
-    """
     for brand in BRANDS:
         url = f"https://news.google.com/rss/search?q={brand}+手机&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
         feed = feedparser.parse(url)
         for entry in feed.entries[:3]:
             published_struct = entry.get("published_parsed") or entry.get("updated_parsed")
-            process_news(brand, entry.title, entry.link, published_struct)
+            link = get_original_link(entry)
+            process_news(brand, entry.title, link, published_struct)
 
 
 def fetch_media_news():
-    """
-    抓取其他科技媒体 RSS
-    """
     for rss in MEDIA_RSS:
         feed = feedparser.parse(rss)
         for entry in feed.entries[:10]:
             published_struct = entry.get("published_parsed") or entry.get("updated_parsed")
             title = entry.title
-            link = entry.link
+            link = entry.link  # 大部分媒体 RSS link 就是原文
             for brand in BRANDS:
                 if brand in title:
                     process_news(brand, title, link, published_struct)

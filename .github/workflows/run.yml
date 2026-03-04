@@ -2,7 +2,7 @@ name: Phone Intel WeChat Bot
 
 on:
   schedule:
-    - cron: '0 */2 * * *'   # 每2小时运行一次
+    - cron: '0 */6 * * *'   # 每6小时运行一次
   workflow_dispatch:
 
 jobs:

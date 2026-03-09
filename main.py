@@ -30,20 +30,7 @@ BRANDS = {
 }
 
 # =========================
-# 科技媒体 RSS
-# =========================
-MEDIA_RSS = [
-    "https://www.ithome.com/rss/",
-    "https://36kr.com/feed",
-    "https://www.huxiu.com/rss/0.xml",
-    "https://www.tmtpost.com/rss",
-    "https://www.ifanr.com/feed",
-    "https://www.leikeji.com/rss",
-    "https://www.mydrivers.com/rss.xml",
-]
-
-# =========================
-# RSSHub 社交媒体
+# 社交媒体配置
 # =========================
 RSSHUB = "https://rsshub.rssforever.com"
 SOCIAL_PLATFORMS = ["weibo", "bilibili", "xiaohongshu", "douyin"]
@@ -110,8 +97,8 @@ def summarize_daily_event(news_list):
 你是手机行业情报分析助手。
 
 任务：
-1. 将以下今日新闻按事件关联性聚合，每个事件编号（事件1、事件2、事件3…）。
-2. 对每个事件生成时间线（时间节点按新闻发布时间排序）。
+1. 将以下今日社交媒体新闻按事件关联性聚合，每个事件编号（事件1、事件2、事件3…）。
+2. 对每个事件生成时间线（按新闻发布时间排序）。
 3. 每个时间节点包含：
    - 时间（YYYY-MM-DD HH:MM）
    - 平台
@@ -143,8 +130,7 @@ def summarize_daily_event(news_list):
     try:
         response = requests.post(DEEPSEEK_URL, headers=headers, json=data, timeout=60)
         response.raise_for_status()
-        result = response.json()
-        summary = result["choices"][0]["message"]["content"]
+        summary = response.json()["choices"][0]["message"]["content"]
         # 确保事件之间至少一行空行
         summary = summary.replace("\n事件", "\n\n事件")
         return summary
@@ -172,27 +158,6 @@ def send_daily_event(event_summary):
                 print(f"企业微信发送失败 (部分 {idx})")
         except Exception as e:
             print(f"企业微信推送错误 (部分 {idx}):", e)
-
-# =========================
-# 科技媒体抓取
-# =========================
-def fetch_media_news():
-    for rss in MEDIA_RSS:
-        try:
-            feed = feedparser.parse(rss)
-        except Exception as e:
-            print(f"解析媒体 RSS 失败: {rss}", e)
-            continue
-        for entry in feed.entries[:10]:
-            title = getattr(entry, "title", None)
-            link = getattr(entry, "link", None)
-            published_struct = entry.get("published_parsed")
-            platform = getattr(feed.feed, "title", "未知平台")
-            account = getattr(entry, "author", "未知账号")
-            for brand, keywords in BRANDS.items():
-                if title and any(k.lower() in title.lower() for k in keywords):
-                    collect_news(brand, title, link, published_struct, platform, account)
-                    break
 
 # =========================
 # 社交媒体抓取
@@ -224,11 +189,10 @@ def fetch_social_news():
 # =========================
 def main():
     try:
-        print("开始抓取手机行业情报...")
+        print("开始抓取社交媒体手机行业情报...")
         global daily_news
         daily_news = []
 
-        fetch_media_news()
         fetch_social_news()
 
         print(f"今日收集新闻条数: {len(daily_news)}")

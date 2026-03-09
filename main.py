@@ -144,7 +144,10 @@ def summarize_daily_event(news_list):
         response = requests.post(DEEPSEEK_URL, headers=headers, json=data, timeout=60)
         response.raise_for_status()
         result = response.json()
-        return result["choices"][0]["message"]["content"]
+        summary = result["choices"][0]["message"]["content"]
+        # 确保事件之间至少一行空行
+        summary = summary.replace("\n事件", "\n\n事件")
+        return summary
     except Exception as e:
         print("DeepSeek 日总结错误:", e)
         return None

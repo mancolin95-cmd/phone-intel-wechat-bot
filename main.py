@@ -3,7 +3,7 @@ import requests
 import hashlib
 import feedparser
 from datetime import datetime
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlsplit, urlunsplit, quote
 import sys
 
 # =========================
@@ -55,6 +55,18 @@ processed_hashes = set()
 daily_news = []
 
 # =========================
+# URL 编码函数
+# =========================
+def encode_url(url):
+    try:
+        parts = urlsplit(url)
+        path = quote(parts.path)
+        query = quote(parts.query, safe="=&")
+        return urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
+    except Exception:
+        return url
+
+# =========================
 # 时间过滤
 # =========================
 def is_today(published_struct):
@@ -75,6 +87,7 @@ def collect_news(brand, title, link, published_struct, platform=None, account=No
         return
     processed_hashes.add(h)
     news_time = datetime(*published_struct[:6]).strftime("%Y-%m-%d %H:%M")
+    link = encode_url(link)
     daily_news.append({
         "brand": brand,
         "title": title,
@@ -85,7 +98,7 @@ def collect_news(brand, title, link, published_struct, platform=None, account=No
     })
 
 # =========================
-# DeepSeek 大事件总结
+# DeepSeek 日总结
 # =========================
 DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
 
@@ -104,10 +117,16 @@ def summarize_daily_event(news_list):
    - 平台
    - 发布账号
    - 核心内容（一句话总结新闻）
-   - 原新闻链接
+   - 原新闻链接，用【链接】显示
 4. 每个事件写一个150字以内概述，总结事件整体内容和影响。
 5. 每个事件之间用一行空行隔开。
-6. 只返回结构化 Markdown 文本。
+6. 只返回结构化 Markdown 文本，示例：
+
+事件1：
+概述：事件概述内容
+
+时间线：
+- YYYY-MM-DD HH:MM | 平台 | 账号名 | 核心内容 [【链接】](真实URL)
 
 新闻列表：
 {content}
@@ -131,17 +150,14 @@ def summarize_daily_event(news_list):
         return None
 
 # =========================
-# 企业微信推送（自动分条推送）
+# 企业微信推送（自动分条）
 # =========================
 def send_daily_event(event_summary):
     if not event_summary:
         print("没有事件总结可推送")
         return
-
     max_len = 1800
-    # 按 1800 字分割消息
     chunks = [event_summary[i:i+max_len] for i in range(0, len(event_summary), max_len)]
-
     for idx, chunk in enumerate(chunks, 1):
         message = f"## 📱 今日手机行业大事件 (部分 {idx}/{len(chunks)})\n\n{chunk}"
         data = {"msgtype": "markdown", "markdown": {"content": message}}
@@ -168,7 +184,6 @@ def fetch_media_news():
             title = getattr(entry, "title", None)
             link = getattr(entry, "link", None)
             published_struct = entry.get("published_parsed")
-            # 使用 feed 的来源作为平台，作者为账号
             platform = getattr(feed.feed, "title", "未知平台")
             account = getattr(entry, "author", "未知账号")
             for brand, keywords in BRANDS.items():

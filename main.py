@@ -65,7 +65,7 @@ def is_today(published_struct):
     return news_date.date() == today.date()
 
 # =========================
-# 处理 Google RSS 原始链接
+# 处理 Google RSS 原始链接（社交媒体也用此方法） 
 # =========================
 def get_original_link(entry):
     link = getattr(entry, "link", "")
@@ -101,6 +101,8 @@ def collect_news(brand, title, link, published_struct):
 # =========================
 # DeepSeek 大事件总结
 # =========================
+DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
+
 def summarize_daily_event(news_list):
     if not news_list:
         return None
@@ -116,8 +118,7 @@ def summarize_daily_event(news_list):
    - 核心内容（一句话总结新闻）
    - 原新闻链接
 4. 每个事件写一个150字以内概述，总结事件整体内容和影响。
-5. 总的内容长度不超过1800字。
-6. 只返回结构化 Markdown 文本，示例：
+5. 只返回结构化 Markdown 文本，示例：
 事件1：
 概述：事件概述内容
 时间线：
@@ -151,33 +152,21 @@ def send_daily_event(event_summary):
     if not event_summary:
         print("没有事件总结可推送")
         return
-    message = f"## 📱 今日手机行业大事件\n\n{event_summary}"
+    # 限制 1800 字
+    message = f"## 📱 今日手机行业大事件\n\n{event_summary[:1800]}"
     data = {"msgtype": "markdown", "markdown": {"content": message}}
     try:
         response = requests.post(WECHAT_WEBHOOK, json=data, timeout=10)
+        print("企业微信响应状态:", response.status_code)
+        print("响应内容:", response.text)
         if response.status_code != 200:
-            print("企业微信发送失败:", response.text)
+            print("企业微信发送失败")
     except Exception as e:
         print("企业微信推送错误:", e)
 
 # =========================
-# 新闻抓取
+# 科技媒体抓取
 # =========================
-def fetch_google_news():
-    for brand, keywords in BRANDS.items():
-        keyword = " OR ".join(keywords)
-        url = f"https://news.google.com/rss/search?q={keyword}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
-        try:
-            feed = feedparser.parse(url)
-        except Exception as e:
-            print(f"解析 Google RSS 失败: {url}", e)
-            continue
-        for entry in feed.entries[:5]:
-            title = getattr(entry, "title", None)
-            link = get_original_link(entry)
-            published_struct = entry.get("published_parsed")
-            collect_news(brand, title, link, published_struct)
-
 def fetch_media_news():
     for rss in MEDIA_RSS:
         try:
@@ -194,6 +183,9 @@ def fetch_media_news():
                     collect_news(brand, title, link, published_struct)
                     break
 
+# =========================
+# 社交媒体抓取
+# =========================
 def generate_social_rss():
     rss_list = []
     for brand, keywords in BRANDS.items():
@@ -224,7 +216,6 @@ def main():
         global daily_news
         daily_news = []
 
-        fetch_google_news()
         fetch_media_news()
         fetch_social_news()
 
@@ -243,4 +234,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    

@@ -5,10 +5,22 @@ import feedparser
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 
+# =========================
 # 监控品牌
-BRANDS = ["华为", "小米", "OPPO", "vivo", "荣耀", "一加", "Apple", "三星"]
+# =========================
+BRANDS = {
+    "华为": ["华为", "Mate", "Pura", "麒麟"],
+    "小米": ["小米", "Redmi"],
+    "OPPO": ["OPPO", "Find"],
+    "vivo": ["vivo", "iQOO"],
+    "荣耀": ["荣耀", "Magic"],
+    "Apple": ["Apple", "iPhone"],
+    "三星": ["三星", "Galaxy"]
+}
 
+# =========================
 # 科技媒体 RSS
+# =========================
 MEDIA_RSS = [
     "https://www.ithome.com/rss/",
     "https://36kr.com/feed",
@@ -19,25 +31,30 @@ MEDIA_RSS = [
     "https://www.mydrivers.com/rss.xml",
 ]
 
-# 企业微信 Webhook
-WECHAT_WEBHOOK = os.environ["WECHAT_WEBHOOK"]
+# =========================
+# RSSHub（社交媒体）
+# =========================
+RSSHUB = "https://rsshub.rssforever.com"
+SOCIAL_PLATFORMS = ["weibo", "bilibili", "xiaohongshu", "douyin"]
 
-# DeepSeek API 配置
+# =========================
+# API配置
+# =========================
+WECHAT_WEBHOOK = os.environ["WECHAT_WEBHOOK"]
 DEEPSEEK_API_KEY = os.environ["DEEPSEEK_API_KEY"]
 DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
 
-# 防止重复处理
+# =========================
+# 去重缓存
+# =========================
 processed_hashes = set()
+daily_news = []
 
-
-def send_wechat(brand, summary, link, news_time):
-    message = f"""## 📱 {brand}
-
-{summary}
-
-发布时间: {news_time}
-[🔗 点击查看原文]({link})
-"""
+# =========================
+# 企业微信推送
+# =========================
+def send_daily_event(event_summary):
+    message = f"## 📱 今日手机行业大事件\n\n{event_summary}"
     data = {
         "msgtype": "markdown",
         "markdown": {"content": message}
@@ -46,41 +63,9 @@ def send_wechat(brand, summary, link, news_time):
     if response.status_code != 200:
         print("企业微信发送失败:", response.text)
 
-
-def summarize(content):
-    prompt = f"""
-你是手机行业情报分析助手。
-请输出：
-1. 150字以内摘要
-2. 分类：新品/供应链/财报/海外/组织/AI等
-3. 重要度 1-5（普通新闻1-2，重要发布3，战略级4-5）
-
-新闻标题：
-{content}
-    """
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "model": "deepseek-chat",
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 150,
-        "temperature": 0.7
-    }
-    try:
-        response = requests.post(DEEPSEEK_URL, headers=headers, json=data)
-        response.raise_for_status()
-        result = response.json()
-        return result["choices"][0]["message"]["content"]
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 402:
-            print("DeepSeek API余额不足，请充值")
-        else:
-            print(f"DeepSeek API错误: {e}")
-        return None
-
-
+# =========================
+# 时间过滤
+# =========================
 def is_today(published_struct):
     if not published_struct:
         return False
@@ -88,75 +73,165 @@ def is_today(published_struct):
     today = datetime.now()
     return news_date.date() == today.date()
 
-
+# =========================
+# 处理 Google RSS 原始链接
+# =========================
 def get_original_link(entry):
-    """
-    处理 Google News RSS 的跳转链接，尽量返回新闻原文链接
-    """
     link = entry.get("link", "")
-    # Google RSS 特殊处理
     if "news.google.com" in link and entry.get("id"):
-        # id里通常是原文URL
         link_candidate = entry["id"]
         if link_candidate.startswith("http"):
             link = link_candidate
         else:
-            # 尝试解析 q= 后的 URL
             parsed = urlparse(link_candidate)
             qs = parse_qs(parsed.query)
             if "url" in qs:
                 link = qs["url"][0]
     return link
 
-
-def process_news(brand, title, link, published_struct):
+# =========================
+# 收集新闻
+# =========================
+def collect_news(brand, title, link, published_struct):
     if not is_today(published_struct):
         return
-
     h = hashlib.md5(title.encode()).hexdigest()
     if h in processed_hashes:
         return
     processed_hashes.add(h)
-
-    summary = summarize(title)
-    if not summary:
-        return
-
-    # 重要度过滤
-    if "重要度 1" in summary or "重要度 2" in summary or "重要度 3" in summary:
-        return
-
     news_time = datetime(*published_struct[:6]).strftime("%Y-%m-%d %H:%M")
-    send_wechat(brand, summary, link, news_time)
-    print(f"已推送: {title} ({news_time})")
+    daily_news.append({
+        "brand": brand,
+        "title": title,
+        "link": link,
+        "time": news_time
+    })
 
+# =========================
+# DeepSeek大事件总结
+# =========================
+def summarize_daily_event(news_list):
+    if not news_list:
+        return None
 
+    content = "\n".join([f"{n['time']} | {n['brand']} | {n['title']} | {n['link']}" for n in news_list])
+
+    prompt = f"""
+你是手机行业情报分析助手。
+
+任务：
+1. 将以下今日新闻按事件关联性进行聚合，每个事件编号（事件1、事件2、事件3…）。
+2. 对每个事件生成时间线（时间节点按新闻发布时间排序）。
+3. 每个时间节点包含：
+   - 时间（YYYY-MM-DD HH:MM）
+   - 核心内容（一句话总结新闻）
+   - 原新闻链接
+4. 每个事件还需写一个150字以内的事件概述，总结事件的整体内容和影响。
+5. 只返回结构化文本，Markdown风格，示例如下：
+
+事件1：
+概述：事件概述内容
+时间线：
+- YYYY-MM-DD HH:MM：核心内容内容 [🔗原文](新闻链接)
+- YYYY-MM-DD HH:MM：核心内容内容 [🔗原文](新闻链接)
+
+事件2：
+概述：事件概述内容
+时间线：
+- YYYY-MM-DD HH:MM：核心内容内容 [🔗原文](新闻链接)
+
+新闻列表：
+{content}
+"""
+
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 800
+    }
+
+    try:
+        response = requests.post(DEEPSEEK_URL, headers=headers, json=data)
+        response.raise_for_status()
+        result = response.json()
+        return result["choices"][0]["message"]["content"]
+    except Exception as e:
+        print("DeepSeek日总结错误:", e)
+        return None
+
+# =========================
+# 新闻抓取
+# =========================
 def fetch_google_news():
-    for brand in BRANDS:
-        url = f"https://news.google.com/rss/search?q={brand}+手机&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
+    for brand, keywords in BRANDS.items():
+        keyword = " OR ".join(keywords)
+        url = f"https://news.google.com/rss/search?q={keyword}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
         feed = feedparser.parse(url)
-        for entry in feed.entries[:3]:
-            published_struct = entry.get("published_parsed") or entry.get("updated_parsed")
+        for entry in feed.entries[:5]:
+            published_struct = entry.get("published_parsed")
             link = get_original_link(entry)
-            process_news(brand, entry.title, link, published_struct)
-
+            collect_news(brand, entry.title, link, published_struct)
 
 def fetch_media_news():
     for rss in MEDIA_RSS:
         feed = feedparser.parse(rss)
         for entry in feed.entries[:10]:
-            published_struct = entry.get("published_parsed") or entry.get("updated_parsed")
             title = entry.title
-            link = entry.link  # 大部分媒体 RSS link 就是原文
-            for brand in BRANDS:
-                if brand in title:
-                    process_news(brand, title, link, published_struct)
+            link = entry.link
+            published_struct = entry.get("published_parsed")
+            for brand, keywords in BRANDS.items():
+                for k in keywords:
+                    if k.lower() in title.lower():
+                        collect_news(brand, title, link, published_struct)
+                        break
 
+def generate_social_rss():
+    rss_list = []
+    for brand, keywords in BRANDS.items():
+        keyword = keywords[0]
+        for platform in SOCIAL_PLATFORMS:
+            url = f"{RSSHUB}/{platform}/search/{keyword}"
+            rss_list.append((brand, url))
+    return rss_list
 
+def fetch_social_news():
+    rss_list = generate_social_rss()
+    for brand, rss in rss_list:
+        feed = feedparser.parse(rss)
+        for entry in feed.entries[:10]:
+            title = entry.title
+            link = entry.link
+            published_struct = entry.get("published_parsed") or entry.get("updated_parsed")
+            collect_news(brand, title, link, published_struct)
+
+# =========================
+# 主程序
+# =========================
 def main():
+    print("开始抓取手机行业情报...")
+
+    global daily_news
+    daily_news = []
+
     fetch_google_news()
     fetch_media_news()
+    fetch_social_news()
 
+    print(f"今日收集新闻条数: {len(daily_news)}")
+
+    summary = summarize_daily_event(daily_news)
+    if summary:
+        send_daily_event(summary)
+        print("已推送今日大事件总结")
+    else:
+        print("今日大事件总结生成失败")
+
+    print("抓取完成")
 
 if __name__ == "__main__":
     main()

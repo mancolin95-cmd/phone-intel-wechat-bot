@@ -65,25 +65,9 @@ def is_today(published_struct):
     return news_date.date() == today.date()
 
 # =========================
-# 处理 Google RSS 原始链接（社交媒体也用此方法） 
-# =========================
-def get_original_link(entry):
-    link = getattr(entry, "link", "")
-    if "news.google.com" in link and entry.get("id"):
-        link_candidate = entry["id"]
-        if link_candidate.startswith("http"):
-            link = link_candidate
-        else:
-            parsed = urlparse(link_candidate)
-            qs = parse_qs(parsed.query)
-            if "url" in qs:
-                link = qs["url"][0]
-    return link
-
-# =========================
 # 收集新闻
 # =========================
-def collect_news(brand, title, link, published_struct):
+def collect_news(brand, title, link, published_struct, platform=None, account=None):
     if not title or not link or not is_today(published_struct):
         return
     h = hashlib.md5(title.encode()).hexdigest()
@@ -95,7 +79,9 @@ def collect_news(brand, title, link, published_struct):
         "brand": brand,
         "title": title,
         "link": link,
-        "time": news_time
+        "time": news_time,
+        "platform": platform or "未知平台",
+        "account": account or "未知账号"
     })
 
 # =========================
@@ -106,7 +92,7 @@ DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
 def summarize_daily_event(news_list):
     if not news_list:
         return None
-    content = "\n".join([f"{n['time']} | {n['brand']} | {n['title']} | {n['link']}" for n in news_list])
+    content = "\n".join([f"{n['time']} | {n['platform']} | {n['account']} | {n['brand']} | {n['title']} | {n['link']}" for n in news_list])
     prompt = f"""
 你是手机行业情报分析助手。
 
@@ -115,14 +101,13 @@ def summarize_daily_event(news_list):
 2. 对每个事件生成时间线（时间节点按新闻发布时间排序）。
 3. 每个时间节点包含：
    - 时间（YYYY-MM-DD HH:MM）
+   - 平台
+   - 发布账号
    - 核心内容（一句话总结新闻）
    - 原新闻链接
 4. 每个事件写一个150字以内概述，总结事件整体内容和影响。
-5. 只返回结构化 Markdown 文本，示例：
-事件1：
-概述：事件概述内容
-时间线：
-- YYYY-MM-DD HH:MM：核心内容内容 [🔗原文](新闻链接)
+5. 每个事件之间用一行空行隔开。
+6. 只返回结构化 Markdown 文本。
 
 新闻列表：
 {content}
@@ -134,7 +119,7 @@ def summarize_daily_event(news_list):
     data = {
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 800
+        "max_tokens": 1200
     }
     try:
         response = requests.post(DEEPSEEK_URL, headers=headers, json=data, timeout=60)
@@ -146,23 +131,28 @@ def summarize_daily_event(news_list):
         return None
 
 # =========================
-# 企业微信推送
+# 企业微信推送（自动分条推送）
 # =========================
 def send_daily_event(event_summary):
     if not event_summary:
         print("没有事件总结可推送")
         return
-    # 限制 1800 字
-    message = f"## 📱 今日手机行业大事件\n\n{event_summary[:1800]}"
-    data = {"msgtype": "markdown", "markdown": {"content": message}}
-    try:
-        response = requests.post(WECHAT_WEBHOOK, json=data, timeout=10)
-        print("企业微信响应状态:", response.status_code)
-        print("响应内容:", response.text)
-        if response.status_code != 200:
-            print("企业微信发送失败")
-    except Exception as e:
-        print("企业微信推送错误:", e)
+
+    max_len = 1800
+    # 按 1800 字分割消息
+    chunks = [event_summary[i:i+max_len] for i in range(0, len(event_summary), max_len)]
+
+    for idx, chunk in enumerate(chunks, 1):
+        message = f"## 📱 今日手机行业大事件 (部分 {idx}/{len(chunks)})\n\n{chunk}"
+        data = {"msgtype": "markdown", "markdown": {"content": message}}
+        try:
+            response = requests.post(WECHAT_WEBHOOK, json=data, timeout=10)
+            print(f"企业微信响应状态 (部分 {idx}):", response.status_code)
+            print(f"响应内容 (部分 {idx}):", response.text)
+            if response.status_code != 200:
+                print(f"企业微信发送失败 (部分 {idx})")
+        except Exception as e:
+            print(f"企业微信推送错误 (部分 {idx}):", e)
 
 # =========================
 # 科技媒体抓取
@@ -178,9 +168,12 @@ def fetch_media_news():
             title = getattr(entry, "title", None)
             link = getattr(entry, "link", None)
             published_struct = entry.get("published_parsed")
+            # 使用 feed 的来源作为平台，作者为账号
+            platform = getattr(feed.feed, "title", "未知平台")
+            account = getattr(entry, "author", "未知账号")
             for brand, keywords in BRANDS.items():
                 if title and any(k.lower() in title.lower() for k in keywords):
-                    collect_news(brand, title, link, published_struct)
+                    collect_news(brand, title, link, published_struct, platform, account)
                     break
 
 # =========================
@@ -191,11 +184,11 @@ def generate_social_rss():
     for brand, keywords in BRANDS.items():
         keyword = keywords[0]
         for platform in SOCIAL_PLATFORMS:
-            rss_list.append((brand, f"{RSSHUB}/{platform}/search/{keyword}"))
+            rss_list.append((brand, f"{RSSHUB}/{platform}/search/{keyword}", platform))
     return rss_list
 
 def fetch_social_news():
-    for brand, rss in generate_social_rss():
+    for brand, rss, platform in generate_social_rss():
         try:
             feed = feedparser.parse(rss)
         except Exception as e:
@@ -205,7 +198,8 @@ def fetch_social_news():
             title = getattr(entry, "title", None)
             link = getattr(entry, "link", None)
             published_struct = entry.get("published_parsed") or entry.get("updated_parsed")
-            collect_news(brand, title, link, published_struct)
+            account = getattr(entry, "author", "未知账号")
+            collect_news(brand, title, link, published_struct, platform, account)
 
 # =========================
 # 主程序

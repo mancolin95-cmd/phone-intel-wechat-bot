@@ -33,7 +33,7 @@ BRANDS = {
 # 社交媒体配置
 # =========================
 RSSHUB = "https://rsshub.rssforever.com"
-SOCIAL_PLATFORMS = ["weibo", "bilibili", "xiaohongshu", "douyin"]
+SOCIAL_PLATFORMS = ["weibo"]  # 先用微博测试，其他平台可按需添加
 
 # =========================
 # 去重缓存
@@ -131,7 +131,6 @@ def summarize_daily_event(news_list):
         response = requests.post(DEEPSEEK_URL, headers=headers, json=data, timeout=60)
         response.raise_for_status()
         summary = response.json()["choices"][0]["message"]["content"]
-        # 确保事件之间至少一行空行
         summary = summary.replace("\n事件", "\n\n事件")
         return summary
     except Exception as e:
@@ -162,22 +161,24 @@ def send_daily_event(event_summary):
 # =========================
 # 社交媒体抓取
 # =========================
-def generate_social_rss():
+def generate_social_rss(test_mode=False):
     rss_list = []
     for brand, keywords in BRANDS.items():
         keyword = keywords[0]
         for platform in SOCIAL_PLATFORMS:
             rss_list.append((brand, f"{RSSHUB}/{platform}/search/{keyword}", platform))
-    return rss_list
+    # 测试模式只抓前 2 条
+    return rss_list[:2] if test_mode else rss_list
 
-def fetch_social_news():
-    for brand, rss, platform in generate_social_rss():
+def fetch_social_news(test_mode=False):
+    for brand, rss, platform in generate_social_rss(test_mode):
         try:
             feed = feedparser.parse(rss)
         except Exception as e:
             print(f"解析社交 RSS 失败: {rss}", e)
             continue
-        for entry in feed.entries[:10]:
+        print(f"平台 {platform} RSS {rss} 抓到 {len(feed.entries)} 条新闻")
+        for entry in feed.entries[:2] if test_mode else feed.entries:
             title = getattr(entry, "title", None)
             link = getattr(entry, "link", None)
             published_struct = entry.get("published_parsed") or entry.get("updated_parsed")
@@ -193,7 +194,7 @@ def main():
         global daily_news
         daily_news = []
 
-        fetch_social_news()
+        fetch_social_news(test_mode=True)  # 测试模式只抓前2条新闻
 
         print(f"今日收集新闻条数: {len(daily_news)}")
 
